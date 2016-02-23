@@ -55,16 +55,22 @@ unsigned char rotaryProcess()
 //------------------------------------------------------------------------------
 // PROGRAM STATE SECTION
 //------------------------------------------------------------------------------
-#define S_MENU       0
-#define S_START      1
-#define S_STOP       2
-#define S_DELAY      3
-#define S_SET_DELAY  4
-#define S_SET_FOCUS  5
-#define S_SET_LONG   6
-#define S_SET_INTVL  7
-#define S_SET_FRAMES 8
-#define S_WAKING_UP  9
+#define S_MENU             0
+#define S_START            1
+#define S_STOP             2
+#define S_DELAY            3
+#define S_SET_DELAY        4
+#define S_SET_FOCUS        5
+#define S_SET_LONG         6
+#define S_SET_INTVL        7
+#define S_SET_FRAMES       8
+#define S_WAKING_UP_START  9
+#define S_WAKING_UP_END   10
+#define S_FOCUS           11
+#define S_SHUTTER         12 
+#define S_RELEASE         13
+#define S_RUNNING         14
+#define S_FIRST_CAPTURE   15
 
 //------------------------------------------------------------------------------
 // MENU SECTION
@@ -122,8 +128,8 @@ int  numFrames = 0;     // FRAMES - number
 long betweenFrames = 0; // INTERVAL - seconds
 long startDelay = 0;    // DELAY - seconds
 
-unsigned long frameMillis = 0;   // see loop funtion - millis
-unsigned long wakingUpMillis = 0;
+unsigned long previousMillis = 0;   // see loop funtion - millis
+
 
 
 // LCD 
@@ -182,10 +188,10 @@ void rotaryButton()
   previousMillis = millis();
 
   switch (currentProgramState) {
-    // change program state to S_STOP if current 
-    // state is S_START or S_WAKING_UP
-    case S_START:
-    case S_WAKING_UP:
+    // change program state to S_STOP 
+    case S_FIRST_CAPTURE:
+    case S_RUNNING:
+    case S_WAKING_UP_END:
       currentProgramState = S_STOP;
       currentMenuState = M_START;
       break;
@@ -625,67 +631,111 @@ void changeProgramState()
         return;
       }
       lcd.print("Waking up...");
-      currentProgramState = S_WAKING_UP;
-      wakeUp();
-      wakingUpMillis = millis();  // reset wake up timer
+      currentProgramState = S_START;
+      digitalWrite(FOCUS_PIN, HIGH);
+      previousMillis = millis();        
       return;
   };
 }
 
-
 //------------------------------------------------------------------------------
-void snapPhoto() 
+// update lcd timer with a delay
+inline void updateLcdTimer(unsigned long curr, unsigned long prev) 
 {
-    if (betweenFrames >= 30) {
-      wakeUp();  
-    }
-   
-    digitalWrite(FOCUS_PIN, HIGH);
-    delay(focusDelay);
-    digitalWrite(SHUTTER_PIN, HIGH);
-    delay(shutterOpen);
-    digitalWrite(SHUTTER_PIN, LOW);
-    digitalWrite(FOCUS_PIN, LOW);
-}
-
-//------------------------------------------------------------------------------
-void wakeUp() 
-{
-  digitalWrite(FOCUS_PIN, HIGH);
-  delay(500);
-  digitalWrite(FOCUS_PIN, LOW);  
-}
-
-//------------------------------------------------------------------------------
-void wakingUp() 
-{
-  const unsigned long wakingUpDelay = 2000;
-  if (millis() - wakingUpMillis >= wakingUpDelay) {
-    currentProgramState = S_START;
-    frameMillis = millis(); 
-    lcd.clear();
-    lcd.print("Taking photos");
-    snapPhoto();
+  static unsigned long previousMillis = 0;
+  
+  if (millis() - previousMillis >= 200) {
+    lcd.setCursor(0, 1);
+    printLcdTimer(betweenFrames-(curr-prev)/1000);
+    previousMillis = millis();
   }
 }
 
+
 //------------------------------------------------------------------------------
 void loop() 
-{ 
+{   
+  unsigned long currentMillis = 0;
+  
   switch (currentProgramState) 
   {
-    case S_WAKING_UP: 
-      wakingUp();
-      return; 
-      
     case S_START:
-      if (millis() - frameMillis >= betweenFrames*1000) {
-        frameMillis = millis();
-        snapPhoto();
+      currentMillis = millis();
+      if (currentMillis - previousMillis >= 500) {   
+        currentProgramState = S_FIRST_CAPTURE;
+        digitalWrite(FOCUS_PIN, LOW);        
+        previousMillis = millis();
       }
-      
-      lcd.setCursor(0, 1);
-      printLcdTimer(betweenFrames-(millis()-frameMillis)/1000);
+      return;
+
+
+    case S_FIRST_CAPTURE: 
+      currentMillis = millis();
+      if (currentMillis - previousMillis >= 3000) {   
+        currentProgramState = S_FOCUS;
+        digitalWrite(FOCUS_PIN, HIGH);
+        lcd.setCursor(0, 0);
+        lcd.print("Running...      ");
+        previousMillis = millis();
+      }
+      return;
+    
+
+    case S_WAKING_UP_START: 
+      currentMillis = millis();      
+      if (currentMillis - previousMillis >= 500) {
+        digitalWrite(FOCUS_PIN, LOW);      
+        currentProgramState = S_WAKING_UP_END;        
+        lcd.setCursor(0, 0);
+        lcd.print("Waking up...    ");
+        previousMillis = millis();
+      }
+      updateLcdTimer(currentMillis, previousMillis);
+      return;
+
+    case S_WAKING_UP_END: 
+      currentMillis = millis();
+      if (currentMillis - previousMillis >= 1500) {
+        currentProgramState = S_RUNNING;        
+        lcd.setCursor(0, 0);
+        lcd.print("Running...      ");
+        previousMillis = millis();
+      }
+      updateLcdTimer(currentMillis, previousMillis);
+      return;
+
+   
+    case S_RUNNING:
+      currentMillis = millis();
+      if (currentMillis - previousMillis >= betweenFrames*1000) {       
+        digitalWrite(FOCUS_PIN, HIGH);
+        currentProgramState = S_FOCUS;
+        previousMillis = millis();
+        return;
+      }
+      updateLcdTimer(currentMillis, previousMillis);
+      return;
+
+
+    case S_FOCUS:
+      currentMillis = millis();
+      if (currentMillis - previousMillis >= focusDelay) {
+        digitalWrite(SHUTTER_PIN, HIGH);
+        currentProgramState = S_SHUTTER;
+        previousMillis = millis(); // ??????????
+      }
+      return;
+
+
+    case S_SHUTTER:
+      currentMillis = millis();
+      //if (currentMillis - previousMillis >= (shutterOpen+focusDelay)) {     
+      if (currentMillis - previousMillis >= shutterOpen) {        
+        digitalWrite(FOCUS_PIN, LOW);
+        digitalWrite(SHUTTER_PIN, LOW);
+        currentProgramState = S_RUNNING;      
+        previousMillis = millis(); // ??????????
+      }
       return;
 
     case S_STOP: // TODO: continue menu
