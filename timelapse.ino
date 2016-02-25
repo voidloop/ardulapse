@@ -28,9 +28,9 @@
  *
  * Returns 0 on no event, otherwise 0x80 or 0x40 depending on the direction.
  */
-unsigned char rotaryProcess() 
+byte rotaryProcess() 
 {
-  static const unsigned char ttable[6][4] = {
+  const static byte ttable[6][4] = {
   {0x3 , 0x2, 0x1,  0x0}, 
   {0x83, 0x0, 0x1,  0x0},
   {0x43, 0x2, 0x0,  0x0}, 
@@ -39,7 +39,7 @@ unsigned char rotaryProcess()
   {0x3 , 0x5, 0x0, 0x80}
   };
   
-  static volatile unsigned char rotaryState = 0;
+  static volatile byte rotaryState = 0;
   
   char pinState = (digitalRead(ROTARY_PIN2) << 1) | digitalRead(ROTARY_PIN1);
   rotaryState = ttable[rotaryState & 0xf][pinState];
@@ -55,56 +55,67 @@ unsigned char rotaryProcess()
 //------------------------------------------------------------------------------
 // PROGRAM STATE SECTION
 //------------------------------------------------------------------------------
-#define S_MENU             0
-#define S_START            1
-#define S_STOP             2
-#define S_DELAY            3
-#define S_SET_DELAY        4
-#define S_SET_FOCUS        5
-#define S_SET_LONG         6
-#define S_SET_INTVL        7
-#define S_SET_FRAMES       8
-#define S_WAKING_UP_START  9
-#define S_WAKING_UP_END   10
-#define S_FOCUS           11
-#define S_SHUTTER         12 
-#define S_RELEASE         13
-#define S_RUNNING         14
-#define S_FIRST_CAPTURE   15
+enum ProgramState {
+	S_MENU,
+	S_START,
+	S_STOP,
+	S_DELAY,
+	S_SET_DELAY,
+	S_SET_FOCUS,
+	S_SET_LONG,
+	S_SET_INTVL,
+	S_SET_FRAMES,
+	S_WAKING_UP_START,
+	S_WAKING_UP_END,
+	S_FOCUS,
+	S_SHUTTER, 
+	S_RELEASE,
+	S_RUNNING,
+	S_FIRST_CAPTURE
+};
 
 //------------------------------------------------------------------------------
 // MENU SECTION
 //------------------------------------------------------------------------------
-// number of items in the main menu
-#define MENU_ITEMS  6
-
-// menu states 
-#define M_DELAY  0
-#define M_FOCUS  1
-#define M_LONG   2
-#define M_INTVL  3
-#define M_FRAMES 4
-#define M_START  5
-
-char mainMenu[MENU_ITEMS][17] = { 
-    "1. Delay        ",
-    "2. Focus        ",
-    "3. Long         ",
-    "4. Interval     ",
-    "5. Frames       ",
-    "6. Start        " 
+enum MenuEntry {
+	M_DELAY  = 0,
+	M_FOCUS  = 1,
+	M_LONG   = 2,
+	M_INTVL  = 3,
+	M_FRAMES = 4,
+	M_START  = 5
 };
 
+// menu text 
+const char menuText[][17] {
+	"Delay", 
+	"Focus",
+	"Long",
+	"Interval",
+    "Frames",
+	"Start"
+};
+
+// main menu entries
+MenuEntry mainMenu[] = {
+	M_DELAY,
+	M_FOCUS,
+	M_LONG,
+	M_INTVL,
+	M_FRAMES,
+	M_START
+}; 
+	
 //------------------------------------------------------------------------------
 // MAIN PROGRAM VARIABLES AND RANGES
 //------------------------------------------------------------------------------
-#define MAX_NUM_FRAMES     399
+#define MAX_NUM_FRAMES    9999
 
 #define MIN_FOCUS_DELAY    300
 #define MAX_FOCUS_DELAY   1000
 
-#define MIN_SHUTTER_OPEN  300
-#define MAX_SHUTTER_OPEN  5000
+#define MIN_SHUTTER_OPEN   300
+#define MAX_SHUTTER_OPEN 60000
 
 // these defines are the lengths of values to print on LCD 
 // padded with leading zeros, if you've adjusted the above defines 
@@ -113,23 +124,31 @@ char mainMenu[MENU_ITEMS][17] = {
 #define LCD_FOCUS_DELAY  4
 #define LCD_SHUTTER_OPEN 4
 
+#define LCD_COLS 16
+#define LCD_ROWS  2
+
 // current rotary encoder push-button state
 bool  rotaryPressed = false;
 
 // current program state
-short currentProgramState = S_MENU;
+ProgramState currentProgramState = S_MENU;
 
-// current menu state 
-short currentMenuState = M_DELAY;  
+// current menu index
+byte currentMenuIndex = 0;  
 
-int  focusDelay = MIN_FOCUS_DELAY;   // FOCUS - millis
-int  shutterOpen = MIN_SHUTTER_OPEN; // LONG - millis
-int  numFrames = 0;     // FRAMES - number
-long betweenFrames = 0; // INTERVAL - seconds
-long startDelay = 0;    // DELAY - seconds
+unsigned long focusDelay = MIN_FOCUS_DELAY;   // FOCUS
+unsigned long shutterOpen = MIN_SHUTTER_OPEN; // LONG 
 
-unsigned long previousMillis = 0;   // see loop funtion - millis
+unsigned long frameMax = 0;
+unsigned long frameCount = 0;
+unsigned long frameInterval = 0;
+ 
+unsigned long startDelay = 0;    // DELAY 
 
+// timing
+unsigned long previousMillis = 0;
+
+char lcdBuf[17];
 
 
 // LCD 
@@ -178,40 +197,46 @@ inline bool rotaryIsPressed()
 // ISR for the rotary button:
 void rotaryButton() 
 {
-  static unsigned long previousMillis = 0; 
-  const unsigned long buttonDelay = 250; 
+	static unsigned long previousMillis = 0; 
+	const unsigned long buttonDelay = 250; 
+	unsigned long currentMillis = millis(); 	
 
-  // debounce rotary push-button
-  if (millis() - previousMillis < buttonDelay)
-    return;
+	// debounce rotary push-button
+	if (currentMillis - previousMillis < buttonDelay)
+		return;
 
-  previousMillis = millis();
+	previousMillis = currentMillis;
 
-  switch (currentProgramState) {
-    // change program state to S_STOP 
-    case S_FIRST_CAPTURE:
-    case S_RUNNING:
-    case S_WAKING_UP_END:
-      currentProgramState = S_STOP;
-      currentMenuState = M_START;
-      break;
+	switch (currentProgramState) {
+    	// change program state to S_STOP 
+		case S_FIRST_CAPTURE:
+ 		case S_RUNNING:
+		case S_WAKING_UP_END:
+		case S_SHUTTER:
+		case S_FOCUS:
+		case S_DELAY:
+			currentProgramState = S_STOP;
+			digitalWrite(FOCUS_PIN, LOW);
+        	digitalWrite(SHUTTER_PIN, LOW);
+			break;
     
-    default:
-      rotaryPressed = true;
-      break;    
-  }
-
+		default:
+			rotaryPressed = true;
+			break;    
+	}
 }
-
-
 
 //------------------------------------------------------------------------------
 void updateLcdMenu() 
 {
-  lcd.setCursor(0, 0);
-  lcd.print(PROGRAM_NAME);
-  lcd.setCursor(0, 1);
-  lcd.print(mainMenu[currentMenuState]);
+	MenuEntry menuEntry = mainMenu[currentMenuIndex];
+
+	lcd.clear();
+	lcd.print(PROGRAM_NAME);
+	lcd.setCursor(0, 1);
+	lcd.print(currentMenuIndex + 1);
+    lcd.print(". ");
+	lcd.print(menuText[menuEntry]);
 }
 
 //------------------------------------------------------------------------------
@@ -363,7 +388,7 @@ void printLcdTimerBrackets(byte currentItem, bool blinkBrackets)
 }
 
 //------------------------------------------------------------------------------
-void changeLcdTimer(long *seconds) 
+void changeLcdTimer(unsigned long *seconds) 
 { 
   // +----------------+
   // |TITLE           |
@@ -418,38 +443,37 @@ void changeLcdTimer(long *seconds)
     }
   }
 
-  unsigned char rotaryState = rotaryProcess();
+	byte rotaryState = rotaryProcess();
 
-  if (!rotaryState) 
-    return; 
+	if (!rotaryState) 
+		return; 
 
-  userInput = true;
+	userInput = true;
   
-  if (setMode) {           // change value <-----
-    if (rotaryState == ROTARY_LEFT) {   
-      timer[currentItem]--;
-    }
-    else {  
-      timer[currentItem]++;
-    }
-
-    if      (timer[itemHours]   > 99) timer[itemHours]   =  0;
-    else if (timer[itemHours]   <  0) timer[itemHours]   = 99;
-    if      (timer[itemMinutes] > 59) timer[itemMinutes] =  0;
-    else if (timer[itemMinutes] <  0) timer[itemMinutes] = 59;
-    if      (timer[itemSeconds] > 59) timer[itemSeconds] =  0;
-    else if (timer[itemSeconds] <  0) timer[itemSeconds] = 59;
-
-  }
-  else {                  // change item <-----
-    if (rotaryState == ROTARY_LEFT) { 
-      currentItem > 0 ? currentItem-- : currentItem = itemOk;
-    }
-    else  {  
-      currentItem = (currentItem + 1) % 4;
-    }
-  }
-
+	if (setMode) {           // change value <-----
+		if (rotaryState == ROTARY_LEFT) {   
+			if (timer[currentItem] > 0)
+				timer[currentItem]--;
+			else if (currentItem==itemHours)
+				timer[currentItem] = 99;
+			else 
+				timer[currentItem] = 59;
+		}
+		else {
+			if (currentItem == itemHours)
+	    		timer[currentItem] = (timer[currentItem] + 1) % 100;
+			else 
+				timer[currentItem] = (timer[currentItem] + 1) % 60;
+    	}	
+	}
+	else {                  // change item <-----
+    	if (rotaryState == ROTARY_LEFT) { 
+			currentItem > 0 ? currentItem-- : currentItem = itemOk;
+		}
+		else  {  
+      		currentItem = (currentItem + 1) % 4;
+		}
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -493,7 +517,7 @@ void printLcdNumberBrackets(byte currentItem, int valueLen, bool blinkBrackets)
 }
 
 //------------------------------------------------------------------------------
-void printLcdNumber(int *valuePtr, short valueLen) {
+void printLcdNumber(unsigned long *valuePtr, byte valueLen) {
   // padding with zeros
   int currentMax = 10;
   for (byte i = 1; i < valueLen; ++i) {
@@ -505,8 +529,9 @@ void printLcdNumber(int *valuePtr, short valueLen) {
 }
 
 //------------------------------------------------------------------------------
-void changeLcdNumber(int *valuePtr, int minValue, int maxValue, 
-                     int increment, short valueLen) 
+void settingNumber(unsigned long *valueP, 
+				   unsigned long minV,  unsigned long maxV, 
+				   unsigned long inc, byte lcdLen) 
 {
   // +----------------+
   // |TITLE           |
@@ -519,28 +544,25 @@ void changeLcdNumber(int *valuePtr, int minValue, int maxValue,
   static byte currentItem = itemOk;
    
   static bool setMode = false;
-  static bool userInput = true; 
+  static bool refreshLcd = true; 
 
   // return to main menu 
   if (rotaryIsPressed()) {
     if (currentItem == itemOk) {
       currentProgramState = S_MENU;
       setMode = false;
-      userInput = true;
+      refreshLcd = true;
       updateLcdMenu();
       return;  
     }
     else { // switch "set mode"
-      userInput = true; 
+      refreshLcd = true; 
       setMode = !setMode;
     }
   }
   
-  // process user input
-  unsigned char rotaryState = rotaryProcess();
-
-  if (userInput) {
-    userInput = false;
+  if (refreshLcd) {
+    refreshLcd = false;
     // display items to LCD
     lcd.setCursor(1, 1);
     printLcdNumber(valuePtr, valueLen);
@@ -554,11 +576,14 @@ void changeLcdNumber(int *valuePtr, int minValue, int maxValue,
     printLcdNumberBrackets(currentItem, valueLen, true); 
   }
 
+  // process user input
+  byte rotaryState = rotaryProcess();
+
   // no user input
   if (!rotaryState) 
     return;
 
-  userInput = true;
+  refreshLcd = true;
 
   if (!setMode) 
     if (rotaryState == ROTARY_LEFT)
@@ -573,80 +598,94 @@ void changeLcdNumber(int *valuePtr, int minValue, int maxValue,
 }
 
 //------------------------------------------------------------------------------
-void navigateLcdMenu() 
+void menuState() 
 {
-  // change menu state if rotary button was pressed
-  if (rotaryIsPressed()) {
-    changeProgramState();
-    return;
-  }
+	// change menu state if rotary button was pressed
 
-  unsigned char rotaryState = rotaryProcess();
-  if (rotaryState == ROTARY_LEFT) {
-    if (currentMenuState > 0)
-      currentMenuState--;
-    updateLcdMenu();
-  }
-  else if (rotaryState == ROTARY_RIGHT) {  
-    if (currentMenuState < MENU_ITEMS - 1)
-      currentMenuState++;
-    updateLcdMenu();
-  }
+	if (rotaryIsPressed()) {
+		changeProgramState();
+		return;	
+	}
+
+	byte rotaryState = rotaryProcess();
+
+	if (!rotaryState)
+		return;
+
+	if (rotaryState == ROTARY_LEFT) {
+    	if (currentMenuIndex > 0)
+			currentMenuIndex--;
+	}
+	else { // ROTARY_RIGHT  
+ 		if (currentMenuIndex < sizeof(mainMenu)/sizeof(MenuEntry)-1)
+			currentMenuIndex++;
+	}
+
+	updateLcdMenu();
 }
 
 //------------------------------------------------------------------------------
 void changeProgramState() 
 {
-  lcd.clear();
-  switch(currentMenuState) {
-    case M_DELAY:
-      lcd.print("Delay");  
-      currentProgramState = S_SET_DELAY;
-      return;
+	lcd.clear();
+	switch(mainMenu[currentMenuIndex]) {	
+		case M_DELAY:
+			lcd.print("Delay");  
+			currentProgramState = S_SET_DELAY;
+			return;
       
-    case M_FOCUS:
-      lcd.print("Focus");
-      currentProgramState = S_SET_FOCUS;
-      return;
+		case M_FOCUS:
+			lcd.print("Focus");
+			currentProgramState = S_SET_FOCUS;
+			return;
      
-    case M_LONG:
-      lcd.print("Long");
-      currentProgramState = S_SET_LONG;
-      return;  
+		case M_LONG:
+			lcd.print("Long");
+			currentProgramState = S_SET_LONG;
+			return;  
       
-    case M_FRAMES:
-      lcd.print("Frames");
-      currentProgramState = S_SET_FRAMES;
-      return;
+		case M_FRAMES:
+			lcd.print("Frames");
+			currentProgramState = S_SET_FRAMES;
+			return;
      
-    case M_INTVL:
-      lcd.print("Interval"); 
-      currentProgramState = S_SET_INTVL;
-      return;
+		case M_INTVL:
+			lcd.print("Interval"); 
+			currentProgramState = S_SET_INTVL;
+			return;
     
-    case M_START:
-      if (betweenFrames == 0) {
-        lcd.print("Interval"); 
-        currentProgramState = S_SET_INTVL;
-        return;
-      }
-      lcd.print("Waking up...");
-      currentProgramState = S_START;
-      digitalWrite(FOCUS_PIN, HIGH);
-      previousMillis = millis();        
-      return;
-  };
+		case M_START:
+			// set interval
+			if (frameInterval == 0) {
+				lcd.print("Interval"); 
+				currentProgramState = S_SET_INTVL;
+				return;
+			}
+			// wait 
+			if (startDelay > 0) {
+				lcd.print("Waiting...");
+				currentProgramState = S_DELAY;				
+			}
+			// start
+			else {
+				lcd.print("Waking up...");
+				currentProgramState = S_START;
+				digitalWrite(FOCUS_PIN, HIGH);
+			}
+			previousMillis = millis();        
+			return;
+	};
 }
 
 //------------------------------------------------------------------------------
 // update lcd timer with a delay
-inline void updateLcdTimer(unsigned long curr, unsigned long prev) 
+inline void updateLcdTimer(unsigned long timer, unsigned long curr, unsigned long prev) 
 {
   static unsigned long previousMillis = 0;
   
   if (millis() - previousMillis >= 200) {
     lcd.setCursor(0, 1);
-    printLcdTimer(betweenFrames-(curr-prev)/1000);
+    printLcdTimer(timer-(curr-prev)/1000);
     previousMillis = millis();
   }
 }
@@ -654,7 +693,10 @@ inline void updateLcdTimer(unsigned long curr, unsigned long prev)
 
 //------------------------------------------------------------------------------
 void loop() 
-{   
+{  
+
+	char buf[20];
+ 
   unsigned long currentMillis = 0;
   
   switch (currentProgramState) 
@@ -668,6 +710,16 @@ void loop()
       }
       return;
 
+	case S_DELAY:
+		currentMillis = millis();	
+		if (currentMillis - previousMillis >= startDelay*1000) {
+			currentProgramState = S_START;
+			lcd.clear();
+			lcd.print("Waking up...");
+			previousMillis = millis();
+		} 
+		updateLcdTimer(startDelay, currentMillis, previousMillis); 
+		return;
 
     case S_FIRST_CAPTURE: 
       currentMillis = millis();
@@ -675,11 +727,11 @@ void loop()
         currentProgramState = S_FOCUS;
         digitalWrite(FOCUS_PIN, HIGH);
         lcd.setCursor(0, 0);
-        lcd.print("Running...      ");
-        previousMillis = millis();
-      }
+        lcd.print("Frame:          ");
+		frameCount = 0;
+		previousMillis = millis();		
+	  }
       return;
-    
 
     case S_WAKING_UP_START: 
       currentMillis = millis();      
@@ -690,7 +742,7 @@ void loop()
         lcd.print("Waking up...    ");
         previousMillis = millis();
       }
-      updateLcdTimer(currentMillis, previousMillis);
+      updateLcdTimer(frameInterval, currentMillis, previousMillis);
       return;
 
     case S_WAKING_UP_END: 
@@ -698,22 +750,21 @@ void loop()
       if (currentMillis - previousMillis >= 1500) {
         currentProgramState = S_RUNNING;        
         lcd.setCursor(0, 0);
-        lcd.print("Running...      ");
+        lcd.print("Frame:          ");
         previousMillis = millis();
       }
-      updateLcdTimer(currentMillis, previousMillis);
+      updateLcdTimer(frameInterval, currentMillis, previousMillis);
       return;
-
    
     case S_RUNNING:
       currentMillis = millis();
-      if (currentMillis - previousMillis >= betweenFrames*1000) {       
+      if (currentMillis - previousMillis >= frameInterval*1000) {       
         digitalWrite(FOCUS_PIN, HIGH);
         currentProgramState = S_FOCUS;
         previousMillis = millis();
         return;
-      }
-      updateLcdTimer(currentMillis, previousMillis);
+      }currentProgramState = S_RUNNING;
+      updateLcdTimer(frameInterval, currentMillis, previousMillis);
       return;
 
 
@@ -722,18 +773,24 @@ void loop()
       if (currentMillis - previousMillis >= focusDelay) {
         digitalWrite(SHUTTER_PIN, HIGH);
         currentProgramState = S_SHUTTER;
-        previousMillis = millis(); // ??????????
+		lcd.setCursor(0, 0);
+		sprintf(buf, "Frames:  %03lu/%03lu", frameMax, frameMax);
+        //previousMillis = millis(); // ??????????
       }
       return;
 
 
     case S_SHUTTER:
       currentMillis = millis();
-      //if (currentMillis - previousMillis >= (shutterOpen+focusDelay)) {     
-      if (currentMillis - previousMillis >= shutterOpen) {        
+      if (currentMillis - previousMillis >= (shutterOpen+focusDelay)) {        
         digitalWrite(FOCUS_PIN, LOW);
         digitalWrite(SHUTTER_PIN, LOW);
-        currentProgramState = S_RUNNING;      
+		frameCount++;
+		if (frameMax != 0 && frameCount >= frameMax) 
+			currentProgramState = S_STOP;
+		else 
+			currentProgramState = S_RUNNING;
+		lcd.print(buf);
         previousMillis = millis(); // ??????????
       }
       return;
@@ -742,7 +799,7 @@ void loop()
       updateLcdMenu(); 
       currentProgramState = S_MENU; 
     case S_MENU:
-      navigateLcdMenu();
+      menuState();
       return;
 
     case S_SET_FOCUS:
@@ -754,7 +811,7 @@ void loop()
       return;
 
     case S_SET_FRAMES:
-      changeLcdNumber(&numFrames, 0, MAX_NUM_FRAMES, 1, LCD_NUM_FRAMES);
+      changeLcdNumber(&frameMax, 0, MAX_NUM_FRAMES, 1, LCD_NUM_FRAMES);
       return;
 
     case S_SET_DELAY:
@@ -762,7 +819,7 @@ void loop()
       return; 
       
     case S_SET_INTVL:
-      changeLcdTimer(&betweenFrames);
+      changeLcdTimer(&frameInterval);
       return;
   };
 }
