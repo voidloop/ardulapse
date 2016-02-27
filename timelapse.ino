@@ -9,7 +9,6 @@
 //------------------------------------------------------------------------------
 #define SHUTTER_PIN    A4
 #define FOCUS_PIN      A5
-#define BACKLIGHT_PIN   7
 #define BUTTON_PIN      2
 #define BUTTON_INT      0 // interrupt 0 = pin 2
 #define ROTARY_PIN1    A3
