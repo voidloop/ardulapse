@@ -135,11 +135,15 @@ enum ChangeNumberItem {
 //------------------------------------------------------------------------------
 #define MAX_NUM_FRAMES    9999
 
-#define MIN_FOCUS_DELAY    300
+#define MIN_FOCUS_DELAY     50
 #define MAX_FOCUS_DELAY   1000
+#define INC_FOCUS_DELAY     50
+#define DEF_FOCUS_DELAY     50
 
-#define MIN_SHUTTER_OPEN   300 
-#define MAX_SHUTTER_OPEN  1000 
+#define MIN_SHUTTER_OPEN    50 
+#define MAX_SHUTTER_OPEN  1000
+#define INC_SHUTTER_OPEN    50
+#define DEF_SHUTTER_OPEN   100
 
 #define WAKE_UP_MIN_INTVL   20000 
 #define WAKE_UP_BEFORE_SHOT  4000
@@ -150,8 +154,8 @@ ProgramState  g_program_state = S_MENU;
 byte          g_menu_index = 0;  
 bool          g_wake_up = false;
 
-unsigned long g_focus_delay = MIN_FOCUS_DELAY;   // FOCUS
-unsigned long g_shutter_open = MIN_SHUTTER_OPEN; // SHUTTER
+unsigned long g_focus_delay = DEF_FOCUS_DELAY;   // FOCUS
+unsigned long g_shutter_open = DEF_SHUTTER_OPEN; // SHUTTER
 unsigned long g_long_exposure = 0;               // LONG
 unsigned long g_start_delay = 0;                 // DELAY 
 unsigned long g_max_frames = 0;                  // FRAMES
@@ -741,11 +745,11 @@ void loop()
             return;
 
         case S_SET_FOCUS:
-            change_number(&g_focus_delay, MIN_FOCUS_DELAY, MAX_FOCUS_DELAY, 100);
+            change_number(&g_focus_delay, MIN_FOCUS_DELAY, MAX_FOCUS_DELAY, INC_FOCUS_DELAY);
             return;
 
         case S_SET_SHUTTER:
-            change_number(&g_shutter_open, MIN_SHUTTER_OPEN, MAX_SHUTTER_OPEN, 100);
+            change_number(&g_shutter_open, MIN_SHUTTER_OPEN, MAX_SHUTTER_OPEN, INC_SHUTTER_OPEN);
             return;
  
         case S_SET_LONG:
